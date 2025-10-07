@@ -124,7 +124,15 @@ const SITUACAO_KEYWORDS = [
   "ativo","aprovado","retido","reprovado","promovido",
   "transferido","transferida","transferencia","transferência",
   "remanejamento","remanejado","remanejada",
-  "nao comparecimento","não comparecimento","nao compareceu","não compareceu"
+  "nao comparecimento","não comparecimento","nao compareceu","não compareceu",
+  "matriculado","matriculada","matricula","matrícula",
+  "concluido","concluída","concluido","concluída",
+  "desistente","desistencia","desistência",
+  "evasao","evasão","evadido","evadida",
+  "falecido","falecida",
+  "cancelado","cancelada","cancelamento",
+  "suspenso","suspensa","suspensão",
+  "trancado","trancada","trancamento"
 ];
 
 function isStatusWord(v) {
@@ -134,7 +142,17 @@ function isStatusWord(v) {
 }
 function looksLikeName(v) {
   const s = norm(v);
-  return /^[A-Za-zÀ-ÿ'`´^~.\- ]{5,}$/.test(s) && /\s/.test(s);
+  if (!s || s.length < 3) return false;
+  
+  // Deve ter pelo menos 3 caracteres e conter pelo menos um espaço (nome e sobrenome)
+  // Aceita acentos e caracteres especiais comuns em nomes brasileiros
+  const namePattern = /^[A-Za-zÀ-ÿ'`´^~.\- ]{3,}$/;
+  
+  // Deve ter pelo menos um espaço ou ser um nome muito comum de uma palavra
+  const hasSpace = /\s/.test(s);
+  const isCommonSingleName = /^(maria|joão|josé|ana|francisco|antonio|carlos|paulo|pedro|luis)$/i.test(s);
+  
+  return namePattern.test(s) && (hasSpace || isCommonSingleName);
 }
 
 // tenta linha a linha achar a melhor célula de NOME
@@ -142,6 +160,17 @@ function findNameInRow(row) {
   const skipKeys = new Set([
     "aluno","situacao","nota_final","faltas","faltas_pct","total_aulas","ac","turma","disciplina","ra","numero","__arquivo","__aba"
   ]);
+  
+  // Primeiro, procura em colunas que podem ter nomes
+  const nameKeys = ["nome","nome_aluno","aluno(a)","estudante","nome_completo","nome_do_aluno"];
+  for (const key of nameKeys) {
+    if (row[key]) {
+      const sv = norm(row[key]);
+      if (looksLikeName(sv)) return sv;
+    }
+  }
+  
+  // Depois, procura em todas as outras colunas
   for (const [k, v] of Object.entries(row)) {
     if (skipKeys.has(k)) continue;
     const sv = norm(v);
@@ -150,13 +179,7 @@ function findNameInRow(row) {
     if (isStatusWord(sv)) continue;
     if (looksLikeName(sv)) return sv;
   }
-  // tentativas extras: colunas comuns
-  for (const key of ["nome","nome_aluno","aluno(a)","estudante"]) {
-    if (row[key]) {
-      const sv = norm(row[key]);
-      if (looksLikeName(sv)) return sv;
-    }
-  }
+  
   return null;
 }
 
@@ -166,26 +189,26 @@ function repairAlunoIfItIsSituacao(rows) {
   // 1) Heurística global: muitos "aluno" com status?
   const sample = rows.slice(0, Math.min(rows.length, 50));
   const statusLikeCount = sample.filter(r => isStatusWord(r.aluno)).length;
-  const shouldRepairGlobal = statusLikeCount >= Math.ceil(sample.length * 0.3); // mais agressivo (30%+)
+  const shouldRepairGlobal = statusLikeCount >= Math.ceil(sample.length * 0.2); // mais agressivo (20%+)
 
-  if (!shouldRepairGlobal) return rows;
-
-  // 2) Reparo linha-a-linha
+  // 2) Reparo linha-a-linha (sempre executa, não só quando shouldRepairGlobal)
   return rows.map(r => {
     const novo = { ...r };
-    if (isStatusWord(novo.aluno)) {
-      // guarda a situação se não existir
-      if (!novo.situacao) novo.situacao = novo.aluno;
-      const candidato = findNameInRow(novo);
-      if (candidato) novo.aluno = candidato;
-    } else if (!looksLikeName(novo.aluno)) {
-      // aluno não parece nome → tenta achar
+    
+    // Se o campo aluno parece ser uma situação, tenta encontrar o nome real
+    if (isStatusWord(novo.aluno) || !looksLikeName(novo.aluno)) {
+      // guarda a situação se não existir e parece ser status
+      if (isStatusWord(novo.aluno) && !novo.situacao) {
+        novo.situacao = novo.aluno;
+      }
+      
+      // procura um nome válido na linha
       const candidato = findNameInRow(novo);
       if (candidato) {
-        if (isStatusWord(novo.aluno) && !novo.situacao) novo.situacao = novo.aluno;
         novo.aluno = candidato;
       }
     }
+    
     return novo;
   });
 }
