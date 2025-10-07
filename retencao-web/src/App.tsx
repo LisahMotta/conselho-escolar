@@ -123,8 +123,8 @@ export default function App() {
       <div className="hero">
         <div className="logo">R</div>
         <div style={{ flex: 1 }}>
-          <div className="title">Retenção Escolar (React + TS)</div>
-          <p className="subtitle">Upload de planilhas, filtros por ciclo/turma/disciplina, KPIs e exportação.</p>
+          <div className="title">Conselho Bimestral</div>
+          <p className="subtitle">EE Profª Malba Thereza Ferraz Campaner</p>
         </div>
         <div className="row">
           <button className="btn-outline" type="button" onClick={baixarExcel}>
