@@ -23,6 +23,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 // ===== Regras =====
 const MEDIA_MINIMA = 5.0;
 const PRESENCA_MINIMA_PCT = 75.0;
+const DISCIPLINAS_VERMELHAS_MAX_EM = 3; // Máximo de disciplinas vermelhas para EM
+const FALTAS_MAX_PCT = 25.0; // Máximo de faltas permitidas (%)
 
 // ===================== Helpers =====================
 const norm  = (s) => (s ?? "").toString().trim();
@@ -344,6 +346,120 @@ function inferirCiclo(turmaRaw) {
   return "Indefinido";
 }
 
+// ===================== Agregação por aluno =====================
+function agregarDadosPorAluno(allRows) {
+  const alunosMap = new Map();
+  
+  for (const row of allRows) {
+    const alunoKey = `${row.aluno}_${row.ra || row.numero || ''}`.trim();
+    
+    if (!alunosMap.has(alunoKey)) {
+      alunosMap.set(alunoKey, {
+        aluno: row.aluno,
+        ra: row.ra,
+        numero: row.numero,
+        turma: row.turma,
+        ciclo: row.ciclo,
+        disciplinas: [],
+        notas: [],
+        faltas: [],
+        presencas: [],
+        total_aulas: [],
+        situacao: row.situacao,
+        ac: row.ac,
+        __arquivos: new Set(),
+        __abas: new Set()
+      });
+    }
+    
+    const aluno = alunosMap.get(alunoKey);
+    
+    // Adiciona disciplina se não existir
+    if (row.disciplina && !aluno.disciplinas.includes(row.disciplina)) {
+      aluno.disciplinas.push(row.disciplina);
+    }
+    
+    // Adiciona notas válidas
+    if (row.nota_final !== null && row.nota_final !== undefined) {
+      aluno.notas.push(row.nota_final);
+    }
+    
+    // Adiciona faltas válidas
+    if (row.faltas_pct !== null && row.faltas_pct !== undefined) {
+      aluno.faltas.push(row.faltas_pct);
+    }
+    
+    // Adiciona presenças válidas
+    if (row.presenca_pct !== null && row.presenca_pct !== undefined) {
+      aluno.presencas.push(row.presenca_pct);
+    }
+    
+    // Adiciona total de aulas se disponível
+    if (row.total_aulas) {
+      aluno.total_aulas.push(row.total_aulas);
+    }
+    
+    // Mantém referência dos arquivos
+    if (row.__arquivo) aluno.__arquivos.add(row.__arquivo);
+    if (row.__aba) aluno.__abas.add(row.__aba);
+  }
+  
+  return Array.from(alunosMap.values());
+}
+
+function calcularMediasEAnalise(aluno) {
+  // Calcula média geral das notas
+  const notasValidas = aluno.notas.filter(n => Number.isFinite(n));
+  const mediaGeral = notasValidas.length > 0 
+    ? notasValidas.reduce((sum, n) => sum + n, 0) / notasValidas.length 
+    : null;
+  
+  // Calcula média de presença
+  const presencasValidas = aluno.presencas.filter(p => Number.isFinite(p));
+  const mediaPresenca = presencasValidas.length > 0 
+    ? presencasValidas.reduce((sum, p) => sum + p, 0) / presencasValidas.length 
+    : null;
+  
+  // Calcula média de faltas
+  const faltasValidas = aluno.faltas.filter(f => Number.isFinite(f));
+  const mediaFaltas = faltasValidas.length > 0 
+    ? faltasValidas.reduce((sum, f) => sum + f, 0) / faltasValidas.length 
+    : null;
+  
+  // Conta disciplinas vermelhas (nota < 5.0)
+  const disciplinasVermelhas = notasValidas.filter(n => n < MEDIA_MINIMA).length;
+  
+  // Determina critérios de retenção
+  const criterioNota = Number.isFinite(mediaGeral) ? (mediaGeral < MEDIA_MINIMA) : false;
+  const criterioPresenca = Number.isFinite(mediaPresenca) ? (mediaPresenca < PRESENCA_MINIMA_PCT) : false;
+  const criterioFaltas = Number.isFinite(mediaFaltas) ? (mediaFaltas > FALTAS_MAX_PCT) : false;
+  
+  // Critério específico para Ensino Médio: mais de 3 disciplinas vermelhas
+  const criterioDisciplinasVermelhasEM = aluno.ciclo === "Ensino Médio" && disciplinasVermelhas > DISCIPLINAS_VERMELHAS_MAX_EM;
+  
+  const retencao = !!(criterioNota || criterioPresenca || criterioFaltas || criterioDisciplinasVermelhasEM);
+  
+  // Monta motivo da retenção
+  const motivos = [];
+  if (criterioNota) motivos.push(`média geral ${mediaGeral?.toFixed(2)} < ${MEDIA_MINIMA}`);
+  if (criterioPresenca) motivos.push(`presença média ${mediaPresenca?.toFixed(1)}% < ${PRESENCA_MINIMA_PCT}%`);
+  if (criterioFaltas) motivos.push(`faltas médias ${mediaFaltas?.toFixed(1)}% > ${FALTAS_MAX_PCT}%`);
+  if (criterioDisciplinasVermelhasEM) motivos.push(`${disciplinasVermelhas} disciplinas vermelhas > ${DISCIPLINAS_VERMELHAS_MAX_EM}`);
+  
+  return {
+    ...aluno,
+    media_geral: Number.isFinite(mediaGeral) ? Number(mediaGeral.toFixed(2)) : null,
+    media_presenca: Number.isFinite(mediaPresenca) ? Number(mediaPresenca.toFixed(1)) : null,
+    media_faltas: Number.isFinite(mediaFaltas) ? Number(mediaFaltas.toFixed(1)) : null,
+    disciplinas_vermelhas: disciplinasVermelhas,
+    total_disciplinas: notasValidas.length,
+    retencao,
+    motivo: motivos.length ? motivos.join(" e ") : "OK",
+    __arquivos: Array.from(aluno.__arquivos),
+    __abas: Array.from(aluno.__abas)
+  };
+}
+
 // ===================== Cálculo principal =====================
 function calcularRetencao(data, origem = {}){
   data = autoInferColumns(data);
@@ -518,14 +634,19 @@ app.post("/upload", upload.array("arquivos", 12), async (req, res) => {
       return res.json({ error: "Nenhum dado processado. Verifique cabeçalhos (Nome, Nota, Frequência/F, Total Aulas) ou se o PDF contém texto." });
     }
 
-    const total = allRows.length;
-    const qtd_ret = allRows.filter(r=>r.retencao).length;
-    const qtd_ok  = total - qtd_ret;
-    const cont_nota  = allRows.filter(r=>/nota /.test(r.motivo) && !/presença /.test(r.motivo)).length;
-    const cont_freq  = allRows.filter(r=>/presença /.test(r.motivo) && !/nota /.test(r.motivo)).length;
-    const cont_ambos = allRows.filter(r=>/nota /.test(r.motivo) && /presença /.test(r.motivo)).length;
+    // Agrega dados por aluno e calcula médias
+    const alunosAgregados = agregarDadosPorAluno(allRows);
+    const alunosComMedias = alunosAgregados.map(calcularMediasEAnalise);
 
-    const candidatos = allRows
+    const total = alunosComMedias.length;
+    const qtd_ret = alunosComMedias.filter(r=>r.retencao).length;
+    const qtd_ok  = total - qtd_ret;
+    const cont_nota  = alunosComMedias.filter(r=>/média geral/.test(r.motivo) && !/presença média/.test(r.motivo)).length;
+    const cont_freq  = alunosComMedias.filter(r=>/presença média/.test(r.motivo) && !/média geral/.test(r.motivo)).length;
+    const cont_ambos = alunosComMedias.filter(r=>/média geral/.test(r.motivo) && /presença média/.test(r.motivo)).length;
+    const cont_disciplinas_vermelhas = alunosComMedias.filter(r=>/disciplinas vermelhas/.test(r.motivo)).length;
+
+    const candidatos = alunosComMedias
       .filter(r => r.retencao)
       .map(r =>
         (r.ra && String(r.ra).trim()) ||
@@ -534,12 +655,12 @@ app.post("/upload", upload.array("arquivos", 12), async (req, res) => {
       )
       .filter(Boolean);
 
-    app.set("lastRows", allRows);
+    app.set("lastRows", alunosComMedias);
     res.json({
-      total, qtd_ret, qtd_ok, cont_nota, cont_freq, cont_ambos,
+      total, qtd_ret, qtd_ok, cont_nota, cont_freq, cont_ambos, cont_disciplinas_vermelhas,
       excluidos_count: excluidos,
       candidatos,
-      rows: allRows
+      rows: alunosComMedias
     });
   }catch(e){
     res.json({ error: e.message || "Falha ao processar arquivos." });

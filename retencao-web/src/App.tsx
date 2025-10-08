@@ -22,6 +22,15 @@ type Registro = {
   numero?: string | number;
   __arquivo?: string;
   __aba?: string;
+  // Novos campos agregados
+  media_geral?: number | null;
+  media_presenca?: number | null;
+  media_faltas?: number | null;
+  disciplinas_vermelhas?: number;
+  total_disciplinas?: number;
+  disciplinas?: string[];
+  __arquivos?: string[];
+  __abas?: string[];
 };
 
 type UploadResp = {
@@ -31,6 +40,7 @@ type UploadResp = {
   cont_nota: number;
   cont_freq: number;
   cont_ambos: number;
+  cont_disciplinas_vermelhas?: number;
   excluidos_count?: number;
   candidatos?: (string | number)[];
   rows: Registro[];
@@ -74,10 +84,11 @@ export default function App() {
     const total = filtrado.length;
     const qtd_ret = filtrado.filter((r) => r.retencao).length;
     const qtd_ok = total - qtd_ret;
-    const cont_nota = filtrado.filter((r) => /nota /.test(r.motivo) && !/presença /.test(r.motivo)).length;
-    const cont_freq = filtrado.filter((r) => /presença /.test(r.motivo) && !/nota /.test(r.motivo)).length;
-    const cont_ambos = filtrado.filter((r) => /nota /.test(r.motivo) && /presença /.test(r.motivo)).length;
-    return { total, qtd_ret, qtd_ok, cont_nota, cont_freq, cont_ambos };
+    const cont_nota = filtrado.filter((r) => /média geral/.test(r.motivo) && !/presença média/.test(r.motivo)).length;
+    const cont_freq = filtrado.filter((r) => /presença média/.test(r.motivo) && !/média geral/.test(r.motivo)).length;
+    const cont_ambos = filtrado.filter((r) => /média geral/.test(r.motivo) && /presença média/.test(r.motivo)).length;
+    const cont_disciplinas_vermelhas = filtrado.filter((r) => /disciplinas vermelhas/.test(r.motivo)).length;
+    return { total, qtd_ret, qtd_ok, cont_nota, cont_freq, cont_ambos, cont_disciplinas_vermelhas };
   }, [filtrado]);
 
   async function handleUpload(e: FormEvent) {
@@ -107,6 +118,7 @@ export default function App() {
       cont_nota: data.cont_nota,
       cont_freq: data.cont_freq,
       cont_ambos: data.cont_ambos,
+      cont_disciplinas_vermelhas: data.cont_disciplinas_vermelhas,
       excluidos_count: data.excluidos_count,
       candidatos: data.candidatos,
     });
@@ -191,15 +203,16 @@ export default function App() {
           </select>
         </div>
         <p style={{ marginTop: 8, opacity: 0.7, fontSize: 12 }}>
-          Envie .xlsx /.xls /.csv /.pdf. Regras: média &lt; 5.0 ou presença &lt; 75% sinaliza retenção.
+          Envie múltiplos .xlsx /.xls /.csv /.pdf. Regras: média geral &lt; 5.0, presença &lt; 75%, faltas &gt; 25%, ou mais de 3 disciplinas vermelhas (EM).
         </p>
       </form>
 
       {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,minmax(0,1fr))", gap: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 12 }}>
         <Kpi title="Total de alunos" value={metrics.total} />
         <Kpi title="Em risco (retenção)" value={metrics.qtd_ret} tone="bad" />
         <Kpi title="OK" value={metrics.qtd_ok} tone="ok" />
+        <Kpi title="Disciplinas vermelhas EM" value={metrics.cont_disciplinas_vermelhas} tone="bad" />
         <Kpi title="Somatório de alertas" value={metrics.cont_nota + metrics.cont_freq + metrics.cont_ambos} />
       </div>
 
@@ -232,6 +245,7 @@ export default function App() {
               data={[
                 { label: "Retenção", val: metrics.qtd_ret },
                 { label: "OK", val: metrics.qtd_ok },
+                { label: "Disc. Vermelhas EM", val: metrics.cont_disciplinas_vermelhas },
               ]}
             >
               <XAxis stroke="#9aa3c0" dataKey="label" />
